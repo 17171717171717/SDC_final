@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ollama 聊天室</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .chat-box { border: 1px solid #ccc; padding: 10px; max-height: 400px; overflow-y: scroll; }
+    .message { margin: 5px 0; }
+    .user { color: blue; }
+    .assistant { color: green; }
+  </style>
+</head>
+<body>
+  <h2>🗨️ Ollama 聊天室</h2>
+
+  <input type="text" id="session-title" placeholder="聊天室標題" />
+  <button onclick="createSession()">建立聊天室</button>
+
+  <div id="session-list"></div>
+
+  <hr>
+
+  <div class="chat-box" id="chat-box"></div>
+
+  <input type="text" id="msg-input" placeholder="輸入訊息..." />
+  <button onclick="sendMessage()">送出</button>
+
+  <script>
+    let currentSessionId = null;
+    const apiBase = 'http://127.0.0.1:8000';
+
+    async function createSession() {
+      const title = document.getElementById("session-title").value;
+      const res = await fetch(`${apiBase}/sessions/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      await listSessions();
+    }
+
+    async function listSessions() {
+      const res = await fetch(`${apiBase}/sessions/`);
+      const data = await res.json();
+      const div = document.getElementById("session-list");
+      div.innerHTML = '<h3>聊天室</h3>';
+      data.forEach(s => {
+        const btn = `<button onclick="loadSession(${s.id})">#${s.id} - ${s.title}</button>`;
+        div.innerHTML += btn + "<br>";
+      });
+    }
+
+    async function loadSession(id) {
+      currentSessionId = id;
+      const res = await fetch(`${apiBase}/msgs/${id}`);
+      const data = await res.json();
+      const box = document.getElementById("chat-box");
+      box.innerHTML = '';
+      data.forEach(msg => {
+        const role = msg.role === 'user' ? '👤' : '🤖';
+        const cls = msg.role;
+        box.innerHTML += `<div class="message ${cls}">${role}: ${msg.content}</div>`;
+      });
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById("msg-input");
+      const text = input.value.trim();
+      if (!currentSessionId || !text) return;
+      input.value = "";
+      const res = await fetch(`${apiBase}/msgs/${currentSessionId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_msg: text }),
+      });
+      await loadSession(currentSessionId);
+    }
+
+    listSessions();  // 頁面載入時讀取聊天室
+  </script>
+</body>
+</html>
