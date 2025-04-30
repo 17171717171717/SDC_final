@@ -9,6 +9,7 @@ import requests
 
 # gemma3:1b 
 # ollama run gemma3:1b 
+# uvicorn main:app --reload
 
 DATABASE_URL = "sqlite:///./chat.db"
 

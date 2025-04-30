@@ -3,35 +3,34 @@
 <head>
   <meta charset="UTF-8" />
   <title>Ollama 聊天室</title>
-  <style>
-    body { font-family: sans-serif; padding: 20px; }
-    .chat-box { border: 1px solid #ccc; padding: 10px; max-height: 400px; overflow-y: scroll; }
-    .message { margin: 5px 0; }
-    .user { color: blue; }
-    .assistant { color: green; }
-  </style>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <h2>🗨️ Ollama 聊天室</h2>
+  <div class="container">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <h2>聊天室列表</h2>
+      <ul id="session-list"></ul>
+      <button id="new-session-btn" onclick="createSession()">建立聊天室</button>
+    </div>
 
-  <input type="text" id="session-title" placeholder="聊天室標題" />
-  <button onclick="createSession()">建立聊天室</button>
+    <!-- Chat Area -->
+    <div class="chat-area">
+      <div id="chat-box"></div>
 
-  <div id="session-list"></div>
-
-  <hr>
-
-  <div class="chat-box" id="chat-box"></div>
-
-  <input type="text" id="msg-input" placeholder="輸入訊息..." />
-  <button onclick="sendMessage()">送出</button>
+      <div class="input-area">
+        <input type="text" id="chat-input" placeholder="輸入訊息..." />
+        <button id="send-btn" onclick="sendMessage()">送出</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     let currentSessionId = null;
     const apiBase = 'http://127.0.0.1:8000';
 
     async function createSession() {
-      const title = document.getElementById("session-title").value;
+      const title = prompt("請輸入聊天室標題:");
       const res = await fetch(`${apiBase}/sessions/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -44,10 +43,10 @@
       const res = await fetch(`${apiBase}/sessions/`);
       const data = await res.json();
       const div = document.getElementById("session-list");
-      div.innerHTML = '<h3>聊天室</h3>';
+      div.innerHTML = '';
       data.forEach(s => {
-        const btn = `<button onclick="loadSession(${s.id})">#${s.id} - ${s.title}</button>`;
-        div.innerHTML += btn + "<br>";
+        const btn = `<li onclick="loadSession(${s.id})">#${s.id} - ${s.title}</li>`;
+        div.innerHTML += btn;
       });
     }
 
@@ -66,7 +65,7 @@
     }
 
     async function sendMessage() {
-      const input = document.getElementById("msg-input");
+      const input = document.getElementById("chat-input");
       const text = input.value.trim();
       if (!currentSessionId || !text) return;
       input.value = "";
