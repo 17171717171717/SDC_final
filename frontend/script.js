@@ -1,74 +1,122 @@
-const sessionList = document.getElementById("session-list");
-const chatBox = document.getElementById("chat-box");
-const chatInput = document.getElementById("chat-input");
-const sendBtn = document.getElementById("send-btn");
-const newSessionBtn = document.getElementById("new-session-btn");
+const { createApp, ref, onMounted, nextTick, watch } = Vue;
 
-let currentSessionId = null;
+createApp({
+  setup() {
+    const sessions = ref([]);
+    const messages = ref([]);
+    const userInput = ref('');
+    const currentSessionId = ref(null);
+    const apiBase = 'http://127.0.0.1:8000';
+    const selectedModel = ref(localStorage.getItem('selectedModel') || 'gemma3:1b');
 
-async function loadSessions() {
-  const res = await fetch("/sessions/");
-  const sessions = await res.json();
-  sessionList.innerHTML = "";
-  sessions.forEach((s) => {
-    const li = document.createElement("li");
-    li.textContent = s.title || `聊天室 ${s.id}`;
-    li.onclick = () => selectSession(s.id);
-    if (s.id === currentSessionId) li.classList.add("active");
-    sessionList.appendChild(li);
-  });
-}
+    watch(selectedModel, (newModel) => {
+      localStorage.setItem('selectedModel', newModel);
+    });
 
-async function createSession() {
-  const title = prompt("聊天室標題？") || "新聊天室";
-  const res = await fetch("/sessions/", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
-  });
-  const newSession = await res.json();
-  currentSessionId = newSession.id;
-  await loadSessions();
-  await loadMessages(currentSessionId);
-}
+    const scrollToBottom = () => {
+      const chatBox = document.getElementById("chat-box");
+      if (chatBox) {
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+    };
 
-async function selectSession(sessionId) {
-  currentSessionId = sessionId;
-  await loadSessions();
-  await loadMessages(sessionId);
-}
+    const listSessions = async () => {
+      const res = await fetch(`${apiBase}/sessions/`);
+      sessions.value = await res.json();
+    };
 
-async function loadMessages(sessionId) {
-  const res = await fetch(`/msgs/${sessionId}`);
-  const msgs = await res.json();
-  chatBox.innerHTML = "";
-  msgs.forEach((m) => {
-    const div = document.createElement("div");
-    div.classList.add("message", m.role);
-    div.textContent = m.content;
-    chatBox.appendChild(div);
-  });
-  chatBox.scrollTop = chatBox.scrollHeight;
-}
+    const createSession = async () => {
+      const title = prompt("聊天室標題？") || "新聊天室";
+      if (!title) return;
+      await fetch(`${apiBase}/sessions/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      await listSessions();
+    };
 
-async function sendMessage() {
-  const content = chatInput.value.trim();
-  if (!content || !currentSessionId) return;
-  chatInput.value = "";
+    const loadSession = async (id) => {
+      currentSessionId.value = id;
+      const res = await fetch(`${apiBase}/msgs/${id}`);
+      messages.value = await res.json();
+      setTimeout(() => {
+        const chatBox = document.getElementById("chat-box");
+        if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+      }, 100);
+    };
 
-  const res = await fetch(`/msgs/${currentSessionId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_msg: content }),
-  });
+    const editSession = async (id, oldTitle) => {
+      const newTitle = prompt("修改聊天室標題：", oldTitle);
+      if (!newTitle || newTitle.trim() === oldTitle) return;
+      await fetch(`${apiBase}/sessions/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newTitle.trim() }),
+      });
+      await listSessions();
+    };
 
-  await loadMessages(currentSessionId);
-}
+    const deleteSession = async (id) => {
+      if (!confirm("Delete chat?")) return;
+      await fetch(`${apiBase}/sessions/${id}`, {
+        method: "DELETE",
+      });
 
-sendBtn.onclick = sendMessage;
-chatInput.addEventListener("keypress", (e) => {
-  if (e.key === "Enter") sendMessage();
-});
-newSessionBtn.onclick = createSession;
+      if (currentSessionId.value === id) {
+        currentSessionId.value = null;
+        messages.value = [];
+      }
 
-loadSessions();
+      await listSessions();
+    };
+
+    const sendMessage = async () => {
+      const text = userInput.value.trim();
+      if (!text || !currentSessionId.value) return;
+      userInput.value = '';
+
+      messages.value.push({ role: 'user', content: text });
+
+      const response = await fetch(`${apiBase}/msgs/${currentSessionId.value}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_msg: text, model: selectedModel.value }),
+      });
+
+      const assistantMsg = { role: 'assistant', content: '' };
+      messages.value = [...messages.value];
+      await nextTick();
+      scrollToBottom();
+
+      messages.value.push(assistantMsg);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        assistantMsg.content += decoder.decode(value, { stream: true });
+        messages.value = [...messages.value];
+        scrollToBottom();
+      }
+    };
+
+    onMounted(() => {
+      listSessions();
+    });
+
+    return {
+      sessions,
+      messages,
+      userInput,
+      currentSessionId,
+      createSession,
+      loadSession,
+      deleteSession,
+      sendMessage,
+      selectedModel,
+      editSession,
+    };
+  }
+}).mount('#app');

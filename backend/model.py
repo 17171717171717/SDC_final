@@ -1,21 +1,19 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import requests
-
-# gemma3:1b 
-# ollama run gemma3:1b 
-# uvicorn main:app --reload
+import json
 
 DATABASE_URL = "sqlite:///./chat.db"
 
 app = FastAPI()
 
-# Allow frontend on all origins for development
+# CORS for frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,6 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Database setup
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
@@ -57,7 +56,10 @@ class SessionCreate(BaseModel):
 
 class MessageCreate(BaseModel):
     user_msg: str
+    model: str = "gemma3:1b"
 
+class SessionNameUpdate(BaseModel):
+    title: str
 # ---------------------
 # Session Routes
 # ---------------------
@@ -89,6 +91,18 @@ def delete_session(session_id: int):
     db.close()
     return {"message": "Session deleted"}
 
+@app.put("/sessions/{session_id}")
+def update_session(session_id: int, session: SessionNameUpdate):
+    db = SessionLocal()
+    chat_session = db.query(ChatSession).filter_by(id=session_id).first()
+    if not chat_session:
+        db.close()
+        raise HTTPException(status_code=404, detail="Session not found")
+    chat_session.title = session.title
+    db.commit()
+    db.refresh(chat_session)
+    db.close()
+    return {"id": chat_session.id, "title": chat_session.title}
 # ---------------------
 # Message Routes
 # ---------------------
@@ -106,31 +120,60 @@ def post_message(session_id: int, msg: MessageCreate):
     if not chat_session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # 儲存 user 訊息
     user_msg = ChatMessage(session_id=session_id, role="user", content=msg.user_msg)
     db.add(user_msg)
     db.commit()
 
-    # Call Ollama API
-    try:
-        response = requests.post("http://localhost:11434/api/generate", json={
-            "model": "gemma3:1b",
-            "prompt": msg.user_msg,
-            "stream": False
-        })
-        response.raise_for_status()
-        assistant_reply = response.json()["response"]
-    except Exception as e:
-        assistant_reply = "[錯誤] 無法從 Ollama 取得回答。"
+    def save_full_response(full_response):
+        assistant_msg = ChatMessage(session_id=session_id, role="assistant", content=full_response)
+        db.add(assistant_msg)
+        db.commit()
+        db.close()
 
-    assistant_msg = ChatMessage(session_id=session_id, role="assistant", content=assistant_reply)
-    db.add(assistant_msg)
-    db.commit()
-    db.close()
+    def event_stream():
+        try:
+            # 取得最新10則歷史訊息
+            history_msgs = (
+                db.query(ChatMessage)
+                .filter_by(session_id=session_id)
+                .order_by(ChatMessage.created_at.desc())
+                .limit(10)
+                .all()
+            )
+            # 由新到舊轉回舊到新順序
+            history_msgs.reverse()
 
-    return {"user": msg.user_msg, "assistant": assistant_reply}
+            # 整理成 prompt 格式
+            history_prompt = ""
+            for m in history_msgs:
+                prefix = "Me: " if m.role == "user" else "You: "
+                history_prompt += prefix + m.content.strip() + "\n"
+            print(history_prompt)
+
+            # 串流回應
+            full = []
+            with requests.post("http://localhost:11434/api/generate", json={
+                "model": msg.model,
+                "prompt": history_prompt,
+                "stream": True
+            }, stream=True) as r:
+                for line in r.iter_lines(chunk_size=512):
+                    if line:
+                        data = json.loads(line.decode("utf-8"))
+                        if "response" in data:
+                            chunk = data["response"]
+                            full.append(chunk)
+                            yield chunk
+        except Exception as e:
+            yield "[錯誤] 無法從 Ollama 取得回答。"
+        finally:
+            save_full_response(''.join(full))
+
+    return StreamingResponse(event_stream(), media_type="text/plain")
 
 # ---------------------
-# Ping Test Route
+# Ping Test
 # ---------------------
 @app.get("/")
 def root():
